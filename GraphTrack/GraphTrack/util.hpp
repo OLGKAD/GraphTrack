@@ -22,4 +22,13 @@ void print_vector(vector<int> vector1);
 vector<int> add_vectors(const vector<int>& a, const vector<int>& b);
 vector<int> subtract_vectors(const vector<int>& a, const vector<int>& b);
 Mat flatten(Mat mat);
+string GetMatDepth(const cv::Mat& mat);
+string GetMatType(const cv::Mat& mat);
+
+
+
+
+
+
+
 #endif /* util_hpp */
