@@ -19,8 +19,9 @@ int height = 240; // 240; //528;
 int patch_width = 5;
 int patch_height = 5;
 int patches_per_frame = 25000; // 1/8 of all patches, needed for PCA
-int lastFrame = 15;
-int currentFrame = 0;
+int last_frame_number = 15;
+int current_frame_number = 0;
+Mat current_frame;
 string window_name = "my_window";
 Mat pca_patches[25000 * 15] = {};
 Mat compressed_patches[15][(240 - 4)][(256 - 4)] = {};
@@ -39,35 +40,29 @@ int nodes_per_frame = 250;
 void compute_average_color() {
     cout << "computing average color" << endl;
     Mat average_frame(height, width, CV_32FC3, Scalar(0));
-    float average_color;
+    Scalar average_color;
     Mat temp1;
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         frames_unnormalized[i].convertTo(temp1, CV_32FC3);
-//        cout << average_frame.type() << endl; // 21
-//        cout << temp1.type() << endl; // 21
         average_frame += temp1;
     }
     write_mat_to_file(average_frame, "sum_of_frames");
-    average_frame /= lastFrame;
-//    write_mat_to_file(average_frame, "average_frame");
-    average_color = sum(average_frame)[0] / (height * width);
+    average_frame /= last_frame_number;
+    average_color = sum(average_frame) / (height * width);
     write_mat_to_file(average_frame, "average_frame");
     cout << "average color is: " << average_color << endl;
     // now subtract average color from every pixel of every frame
     Mat temp2;
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         frames_unnormalized[i].convertTo(temp2, CV_32FC3);
-//        cout << temp.rows << endl; // 528
-//        cout << temp.cols << endl; // 720
-//        write_mat_to_file(temp2, "temp"); // the very last temp will be saved as the file is written at every iteration
-        frames[i] = temp2 - Scalar(average_color, average_color, average_color); // ERROR here
+        frames[i] = temp2 - average_color;
     }
     
-    namedWindow("temp");
-//    cout << average_frame.row(0).col(0) << endl;
-    imshow("temp", average_frame / 255); // before displaying it multiplies all pixel values by 255. (that's how imshow works)
-    waitKey(0);
-    destroyAllWindows();
+    // show average
+//    namedWindow("temp");
+//    imshow("temp", average_frame / 255); // before displaying it multiplies all pixel values by 255. (that's how imshow works)
+//    waitKey(0);
+//    destroyAllWindows();
     
 }
 
@@ -96,15 +91,15 @@ void read_video() {
         }
         
         bool isSuccess = cap.read(frame); // read a new frame from the video
-        if (isSuccess == false || frameNumber >= lastFrame)
+        if (isSuccess == false || frameNumber >= last_frame_number)
         {
             break;
         }
-        frames_unnormalized[frameNumber] = frame;
+        frames_unnormalized[frameNumber] = frame.clone();
         frameNumber += 1;
     }
     cap.release();
-    write_mat_to_file(frames_unnormalized[0], "first_video_frame_before_normalizing");
+//    write_mat_to_file(frames_unnormalized[0], "first_video_frame_before_normalizing");
     compute_average_color();
     write_mat_to_file(frames[0], "first_video_frame");
 }
@@ -114,7 +109,7 @@ PCA computePCA_basis() {
     
     Mat frame;
     Mat frame_temp;
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         frame_temp = frames[i];
         frame_temp.convertTo(frame, CV_32FC3);
         Mat patch;
@@ -126,8 +121,8 @@ PCA computePCA_basis() {
         }
     }
     
-    Mat patches(patches_per_frame * lastFrame, patch_width * patch_height * 3, CV_32FC1);
-    vconcat( pca_patches, patches_per_frame * lastFrame, patches );
+    Mat patches(patches_per_frame * last_frame_number, patch_width * patch_height * 3, CV_32FC1);
+    vconcat( pca_patches, patches_per_frame * last_frame_number, patches );
     
     PCA pca(patches, Mat(), PCA::DATA_AS_ROW, 16);
     
@@ -140,15 +135,14 @@ void compress_all_patches(PCA pca) {
     Mat eigenvalues = pca.eigenvalues;
     Mat eigenvectors = pca.eigenvectors; // the top 16 are already chosen. So, x_new = eigenvectors * x_old
     Mat mean = pca.mean;   // ERROR: PCA.mean != actual mean, as it wasn't computed over all patches.
-    cout << "MEAN (should be zero: " << mean << endl;
-    Mat transposed_mean;
-    transpose(mean, transposed_mean);
-    
+    cout << "MEAN (should be zero).. ? " << mean << endl;
+    cout << "sum(mean): " << sum(mean) << endl;
+
     Mat frame_temp;
     Mat frame;
     Mat transposed_patch(patch_height * patch_width * 3, 1, CV_32FC1);
     Mat compressed_patch(patch_height * patch_width * 3, 1, CV_32FC1);
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         cout << "frame number: " << i << endl;
         frame_temp = frames[i];
 //        cout << frame_temp << endl;
@@ -161,7 +155,6 @@ void compress_all_patches(PCA pca) {
 //                if (j == 0 & k == 0)
                 transpose(flatten(frame(Rect( k, j, patch_width, patch_height))), transposed_patch);
                 compressed_patch = eigenvectors * transposed_patch;
-//                compressed_patch = eigenvectors * (transposed_patch - transposed_mean);
                 
                 compressed_patches[i][j][k] = compressed_patch.clone();
 //                if (i == 0 && j == 0 && k == 0) {
@@ -181,7 +174,7 @@ void compress_all_patches_new(PCA pca) {
     Mat eigenvectors = pca.eigenvectors;
     Mat frame_temp;
     Mat kernel_one = eigenvectors.row(0).reshape(1,5);
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         frame_temp = frames[i];
     }
 }
@@ -192,13 +185,14 @@ void on_mouse_click(int event, int x, int y, int flags, void* userdata)
     if  ( event == EVENT_LBUTTONDOWN )
     {
 //        cout << "Left button of the mouse is clicked - position (" << x << ", " << y << ")" << endl;
-        circle(img,Point(x,y),10,Scalar(255,255,255), CV_FILLED, 1);
+//        circle(img,Point(x,y),10,Scalar(255,255,255), CV_FILLED, 1);
+        rectangle(img, Point(x,y), Point(x + patch_width, y + patch_height), Scalar(255,255,255), 1); // accepts the top-left and bottom-right vertices
         imwrite("media/ex.jpg", img);
         imshow(window_name, img);
         //        void circle(Mat& img, Point center, int radius, const Scalar& color, int thickness=1, int lineType=8, int shift=0)¶
         
         // save the positive patch
-        positive_patches[positve_patch_counter] = compressed_patches[currentFrame][y][x];
+        positive_patches[positve_patch_counter] = compressed_patches[current_frame_number][y][x];
         positve_patch_counter += 1;
         // save the negative patches. THIS PART IS INCOMPLETE
         int x_temp;
@@ -207,28 +201,29 @@ void on_mouse_click(int event, int x, int y, int flags, void* userdata)
             srand(time(0));
             x_temp = rand() % (width - patch_width + 1);
             y_temp = rand() % (height - patch_height + 1);
-            negative_patches[negative_patch_counter] = compressed_patches[currentFrame][y_temp][x_temp];
+            negative_patches[negative_patch_counter] = compressed_patches[current_frame_number][y_temp][x_temp];
             negative_patch_counter += 1;
         }
     }
 }
 
 void on_trackbar(int, void* args) {
-    Mat frame = frames[currentFrame];
-    imshow(window_name, frame);
-    setMouseCallback(window_name, on_mouse_click, &frame); ///
+    cout << "current trackbar frame: " << current_frame_number << endl;
+    current_frame = frames_unnormalized[current_frame_number];
+    imshow(window_name, current_frame);
+//    setMouseCallback(window_name, on_mouse_click, &frame); ///
     waitKey(0);
-    cout << "current frame: " << currentFrame << endl;
+    
 }
-
+// I WANT NONE-NORMALIZED FRAMES TO BE DISPLAYED
 void mark_interest_points() {
     cout << "Mark interest points" << endl;
     namedWindow(window_name); //create a window
-    Mat frame;
-    frame = frames[0];
-    setMouseCallback(window_name, on_mouse_click, &frame);
-    imshow(window_name, frame);
-    createTrackbar( "frames", "my_window", &currentFrame, lastFrame, on_trackbar);
+    
+    current_frame = frames_unnormalized[0]; /////////////////////////// ALWAYS CALLED WITH THE 1ST FRAME
+    setMouseCallback(window_name, on_mouse_click, &current_frame); // MouseCallback is defined on a window, not a particular image / frame displayed in that window => no need to call it several times. However once a point is marked, the rectangle should be drawn & displayed on the CURRENT frame. => there should be a GLOBAL VARIABLE (current frame).
+    imshow(window_name, current_frame);
+    createTrackbar( "frames", "my_window", &current_frame_number, last_frame_number - 1, on_trackbar);
     
     /// Wait until user press some key
     waitKey(0);
@@ -265,7 +260,7 @@ void select_candidates() {
     double maxVal;
     Point minLoc;
     Point maxLoc;
-    for (int i = 0; i < lastFrame; i++) {
+    for (int i = 0; i < last_frame_number; i++) {
         // fill up "distances"
         for (int j = 0; j < height - patch_height + 1; j++) {
             for (int k = 0; k < width - patch_width + 1; k++) {
@@ -297,6 +292,8 @@ int main(int argc, const char * argv[]) {
 //    PCA pca = computePCA_basis(); // here only for testing
     read_video();
     compress_video();
+    write_mat_to_file(frames_unnormalized[0], "first_video_frame_before_normalizing");
+    write_mat_to_file(frames_unnormalized[13], "thirteenth_video_frame_before_normalizing");
     mark_interest_points();
     select_candidates();
     cout << candidate_nodes[0][0] << endl;
