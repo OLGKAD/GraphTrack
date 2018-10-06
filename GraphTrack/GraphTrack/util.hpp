@@ -24,6 +24,7 @@ vector<int> subtract_vectors(const vector<int>& a, const vector<int>& b);
 Mat flatten(Mat mat);
 string GetMatDepth(const cv::Mat& mat);
 string GetMatType(const cv::Mat& mat);
+void write_mat_to_file(Mat mat, string filename);
 
 
 

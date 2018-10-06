@@ -8,6 +8,11 @@
 using namespace cv;
 using namespace std;
 
+void write_mat_to_file(Mat mat, string filename) {
+    FileStorage file("debug_log/" + filename, FileStorage::WRITE);
+    
+    file << filename << mat; // the matrix in the file will be named the same as the filename here.
+}
 vector<int> mat_to_vector(Mat mat) {
     vector<int> array;
     if (mat.isContinuous()) {
@@ -52,23 +57,49 @@ vector<int> subtract_vectors(const vector<int>& a, const vector<int>& b)
 }
 
 // flaten a Mat into a 1D array. Mat might have 3 (or more) channels. All values should be flattened into a single row. 
-Mat flatten(Mat mat) {
+Mat flatten2(Mat patch) {
     Mat bgr[3];   //destination array
-    split(mat,bgr);//split source
+    Mat mat(patch.rows, patch.cols * 3, CV_32FC1);
+
+    split(patch,bgr);//split source
     hconcat(bgr, 3, mat);
-//    cout << mat.rows << endl; // 20
-//    cout << mat.cols << endl; // 60
     Mat temp[75] = {};
-    Mat result;
-    Mat entry;
+    Mat result(1, 75, CV_32FC1);
+    Mat row_pointer;
     for (int i = 0; i < mat.rows; ++i) {
+        row_pointer = mat.row(i);
+/////////////////////////////////////////// SPEED UP: save pointer to mat.row(i), and then access temp_row.col(j)
         for (int j = 0; j < mat.cols; ++j) {
-            temp[i * mat.cols + j] = mat.row(i).col(j);
+            temp[i * mat.cols + j] = row_pointer.col(j);
         }
     }
     hconcat( temp, 75, result );
     return result;
 }
+
+// another version of "flatten". As of now, it's faster
+/////////////////////////////////////// SOLUTION: seems like the only way to speed things up is to understand that "CONVOLUTIONS" part
+Mat flatten(Mat patch) {
+    Mat bgr[3];   //destination array
+    split(patch,bgr);//split source
+    Mat result;
+    // stack the channels into a new mat:
+    // this loop really SLOWS things down
+    for (int i=0; i<3; i++)
+        result.push_back(bgr[i]);
+    result = result.reshape(1,1);
+
+    return result;
+    
+//    Mat m1 = Mat(1,75, CV_32FC1, double(2));
+//    return m1;
+}
+
+//Mat res; // stack the channels into a new mat:
+//for (size_t i=0; i<chans.size(); i++)
+//res.push_back(chans[i]);
+//
+//res = res.reshape(1,1); // flat 1d, again.
 
 // multiply a vector by a matrix
 //Mat transform_vector(Mat matrix, Mat vector) {
