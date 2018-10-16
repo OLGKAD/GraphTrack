@@ -1,6 +1,5 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include "PCA.hpp"
 #include <stdlib.h>     /* srand, rand */
 #include <vector>
 #include "util.hpp"
@@ -16,10 +15,10 @@ Mat frames_unnormalized[269] = {};
 Mat frames[269] = {}; // video has 269 frames (270, but the first frame is blank)
 int width = 720; // 256; // 720;
 int height = 528; // 240; //528;
-int patch_width = 10;
-int patch_height = 10;
-int patches_per_frame = 40000; // 1/8 of all patches, needed for PCA
-int last_frame_number = 15;
+int patch_width = 15;  // becomes too slow at 20. LiveSketch used 9x9 patches
+int patch_height = 15;
+int patches_per_frame = 40000; // 1/8 of all patches, needed for PCA. COULD IT BE DECREASED?
+int last_frame_number = 45;
 int current_frame_number = 0;
 float lambda_f = 1;
 float lambda_b = 1;
@@ -28,29 +27,30 @@ float lambda_d = 10;
 int sigma_b = 4096;
 Mat current_frame;
 string window_name = "my_window";
-Mat pca_patches[40000 * 15] = {};
-Mat compressed_patches[15][(528 - 9)][(720 - 9)] = {};
+Mat pca_patches[40000 * 45] = {};
+Mat compressed_patches[45][(528 - 14)][(720 - 14)] = {};
 Mat positive_patches[5] = {}; // one per frame in only some frames
 int interest_points_per_video = 5; // in how many frames an interest point should be marked
 int positive_patch_counter = 0; // the next positve patch will be saved at this index in positive_patches
 Mat negative_patches[5 * 20] = {}; // in each frame where interest points were marked (5), we select a number of negative examples (20 - CHOSEN RANDOMLY)
 int negative_patches_per_frame = 20;
 int negative_patch_counter = 0; // the next negative patch will be saved at this index in negative_patches
-Mat candidate_nodes[15][250] = {}; // 250 candidates patches, per each frame
-Point candidate_nodes_coordinates[15][250] = {};
-int nodes_per_frame = 250;
+Mat candidate_nodes[45][200] = {}; // 200 candidates patches, per each frame
+Point candidate_nodes_coordinates[45][200] = {};
+int nodes_per_frame = 200;
 
-bool has_interest_point[15] = {}; // true if an interest point was marked in the frame
-uchar expanded[15][250] = {}; // 1 - if expanded; 0 - not expanded; -1 - node doesn't exist
-float distance_from_source[15][250] = {}; // stores distances to each node from the source. Initialized to +inf (HUGE_VALF).
-int parent_pointers[15][250] = {}; // needed to recover the path after a run of Djikstra. Every element stores the index of parent node in the previous row.
+bool has_interest_point[45] = {}; // true if an interest point was marked in the frame
+uchar expanded[45][200] = {}; // 1 - if expanded; 0 - not expanded; -1 - node doesn't exist
+float distance_from_source[45][200] = {}; // stores distances to each node from the source. Initialized to +inf (HUGE_VALF).
+int parent_pointers[45][200] = {}; // needed to recover the path after a run of Djikstra. Every element stores the index of parent node in the previous row.
 int sink_parent_pointer;
+
 
 /* computes the average color of the video: sum all the pixel RGB values (over all pixels, over all frames) and divide by the #pixels (width * height * frames).  AND
  * Substracts the average color from every pixel in the video, before it's used in PCA.
  */
 void compute_average_color() {
-    cout << "computing average color" << endl;
+    cout << "Computing average color" << endl;
     Mat average_frame(height, width, CV_32FC3, Scalar(0));
     Scalar average_color;
     Mat temp1;
@@ -58,11 +58,11 @@ void compute_average_color() {
         frames_unnormalized[i].convertTo(temp1, CV_32FC3);
         average_frame += temp1;
     }
-    write_mat_to_file(average_frame, "sum_of_frames");
+//    write_mat_to_file(average_frame, "sum_of_frames");
     average_frame /= last_frame_number;
     average_color = sum(average_frame) / (height * width);
-    write_mat_to_file(average_frame, "average_frame");
-    cout << "average color is: " << average_color << endl;
+//    write_mat_to_file(average_frame, "average_frame");
+
     // now subtract average color from every pixel of every frame
     Mat temp2;
     for (int i = 0; i < last_frame_number; i++) {
@@ -70,18 +70,12 @@ void compute_average_color() {
         frames[i] = temp2 - average_color;
     }
     
-    // show average
-//    namedWindow("temp");
-//    imshow("temp", average_frame / 255); // before displaying it multiplies all pixel values by 255. (that's how imshow works)
-//    waitKey(0);
-//    destroyAllWindows();
-    
 }
 
 // fills out the "frames" array
 void read_video() {
     cout << "Reading the video" << endl;
-    VideoCapture cap("media/megamind.avi");
+    VideoCapture cap("media/rabbit_fast.avi");
     
     if (cap.isOpened() == false)
     {
@@ -97,8 +91,8 @@ void read_video() {
         if (frameNumber == -1) {
             frameNumber += 1;
             cap.read(frame);
-            cout << frame.rows << endl;
-            cout << frame.cols << endl;
+//            cout << frame.rows << endl;
+//            cout << frame.cols << endl;
             continue;
         }
         
@@ -111,9 +105,8 @@ void read_video() {
         frameNumber += 1;
     }
     cap.release();
-//    write_mat_to_file(frames_unnormalized[0], "first_video_frame_before_normalizing");
     compute_average_color();
-    write_mat_to_file(frames[0], "first_video_frame");
+//    write_mat_to_file(frames[0], "first_video_frame");
 }
 
 PCA computePCA_basis() {
@@ -145,10 +138,7 @@ PCA computePCA_basis() {
 void compress_all_patches(PCA pca) {
     cout << "All patches in the video are being compressed" << endl;
     Mat eigenvalues = pca.eigenvalues;
-    Mat eigenvectors = pca.eigenvectors; // the top 16 are already chosen. So, x_new = eigenvectors * x_old
-    Mat mean = pca.mean;   // ERROR: PCA.mean != actual mean, as it wasn't computed over all patches.
-//    cout << "MEAN (should be zero).. ? " << mean << endl;
-//    cout << "sum(mean): " << sum(mean) << endl;
+    Mat eigenvectors = pca.eigenvectors;
 
     Mat frame_temp;
     Mat frame;
@@ -161,7 +151,6 @@ void compress_all_patches(PCA pca) {
 
         for (int j = 0; j < height - patch_height + 1; j++) {
             for (int k = 0; k < width - patch_width + 1; k++) {
-//                if (j == 0 & k == 0)
                 transpose(flatten(frame(Rect( k, j, patch_width, patch_height))), transposed_patch);
                 compressed_patch = eigenvectors * transposed_patch;
                 compressed_patches[i][j][k] = compressed_patch.clone();
@@ -172,25 +161,18 @@ void compress_all_patches(PCA pca) {
     
 }
 
-//void compress_all_patches_new(PCA pca) {
-//    Mat eigenvalues = pca.eigenvalues;
-//    Mat eigenvectors = pca.eigenvectors;
-//    Mat frame_temp;
-//    Mat kernel_one = eigenvectors.row(0).reshape(1,5);
-//    for (int i = 0; i < last_frame_number; i++) {
-//        frame_temp = frames[i];
-//    }
-//}
-
 void on_mouse_click(int event, int x, int y, int flags, void* userdata)
 {
-    cout << "interest point: frame, y, x: " << current_frame_number << ", " << y << ", " << x << endl;
+    // the point of click is the center of the rectangle. However patches are defined by their top-left corner => x and y should be adjusted.
+    x -= patch_width / 2;
+    y -= patch_height / 2;
+    
     Mat &img = *((Mat*)(userdata));
     Mat img_copy = img.clone();
     if  ( event == EVENT_LBUTTONDOWN )
     {
         candidate_nodes_coordinates[current_frame_number][0] = Point(x, y);
-        rectangle(img_copy, Point(x,y), Point(x + patch_width, y + patch_height), Scalar(255,255,255), 1); // accepts the top-left and bottom-right vertices
+        rectangle(img_copy, Point(x,y), Point(x + patch_width, y + patch_height), Scalar(255,255,255), 2); // accepts the top-left and bottom-right vertices
         imwrite("media/ex.jpg", img_copy);
         imshow(window_name, img_copy);
 
@@ -207,7 +189,7 @@ void on_mouse_click(int event, int x, int y, int flags, void* userdata)
                 x_temp = rand() % (width - patch_width + 1);
                 y_temp = rand() % (height - patch_height + 1);
                 // if far away from the positive patch
-                if (abs(x_temp - x) > 20 && abs(y_temp - y) > 20) {
+                if (abs(x_temp - x) > 50 && abs(y_temp - y) > 50) {
                     break;
                 }
             }
@@ -220,7 +202,6 @@ void on_mouse_click(int event, int x, int y, int flags, void* userdata)
         for (int i = 1; i < nodes_per_frame; i++) {
             expanded[current_frame_number][i] = -1;
         }
-//        Mat expanded(15, 250, CV_8UC1, Scalar(0)); // 1 - if expanded; 0 - not expanded; -1 - node doesn't exist
     }
 }
 
@@ -237,7 +218,7 @@ void mark_interest_points() {
     namedWindow(window_name); //create a window
     
     current_frame = frames_unnormalized[0]; /////////////////////////// ALWAYS CALLED WITH THE 1ST FRAME
-    setMouseCallback(window_name, on_mouse_click, &current_frame); // MouseCallback is defined on a window, not a particular image / frame displayed in that window => no need to call it several times. However once a point is marked, the rectangle should be drawn & displayed on the CURRENT frame. => there should be a GLOBAL VARIABLE (current frame).
+    setMouseCallback(window_name, on_mouse_click, &current_frame);
     imshow(window_name, current_frame);
     createTrackbar( "frames", "my_window", &current_frame_number, last_frame_number - 1, on_trackbar);
     
@@ -279,7 +260,7 @@ float distance_to_positive_patches(int frame, int node) {
         }
     }
     
-    closest_distance *= lambda_f;
+//    closest_distance *= lambda_f;
     
     return closest_distance;
 }
@@ -302,16 +283,16 @@ float distance_to_negative_patches(int frame, int node) {
         closest_distance = sigma_b;
     }
     
-    closest_distance *= lambda_b;
+//    closest_distance *= lambda_b;
     
     return closest_distance;
 }
 
 // candidate selection::: UNTESTED
-// selects 250-250 nodes (patches) in each frame, resembling the interest points the most.
+// selects 200-200 nodes (patches) in each frame, resembling the interest points the most.
 void select_candidates() {
     cout << "Candidate nodes are being chosen" << endl;
-    /* we'll have (w-4) * (h-4) values, and we'll need the 250 smallest. Sorting will cost O(w*h * log(w*h)). Finding 250 smallest costs O(w*h * 250), which is faster.
+    /* we'll have (w-4) * (h-4) values, and we'll need the 200 smallest. Sorting will cost O(w*h * log(w*h)). Finding 200 smallest costs O(w*h * 200), which is faster.
      So, we'll first find the min, then the min of the rest, etc.
      */
     Mat distances(height - patch_height + 1, width - patch_width + 1, CV_32FC1);
@@ -344,12 +325,12 @@ void select_candidates() {
     }
 }
 
-// each patch will be represented using 16 numbers (instead of 300), and everything will be stored in compressed_video array;
+// each patch will be represented using 16 numbers (instead of 450), and everything will be stored in compressed_video array;
 void compress_video() {
     PCA pca = computePCA_basis();
-    write_mat_to_file(pca.eigenvectors, "PCA_eigenvectors");
+//    write_mat_to_file(pca.eigenvectors, "PCA_eigenvectors");
     compress_all_patches(pca); // runs at about 5-10 sec / frame, depending on a day... . Fine for now.
-    write_mat_to_file(compressed_patches[0][0][0], "first_compressed_patch");
+//    write_mat_to_file(compressed_patches[0][0][0], "first_compressed_patch");
 }
 
 // assumes that candidate nodes have already been selected, and interest points marked
@@ -378,16 +359,18 @@ void djikstra() {
     int min_node_frame;
     int min_node_number;
     float temp_edge;
+    float temp_node;
     bool any_nodes_left = true;
+    int const_shift = 10000; // Some of the distances to the source could be negative, thus Djikstra may not be able to find the shortest path. To confront this we add a large constant value to each node, which doesn't change the relative path lengths, but lets Djikstra ran smoothly.
     
     //IS IT CORRECT TO ONLY CHECK FORWARD EDGES, OR SHOULD I CHECK PREVIOUS LAYERS AS WELL? - YES. The graph is directed.
     while(true) {
         if (source_expanded == false) {
             if (has_interest_point[0]) {
-                distance_from_source[0][0] = distance_to_positive_patches(0, 0) - distance_to_negative_patches(0, 0);
+                distance_from_source[0][0] = lambda_f * distance_to_positive_patches(0, 0) - lambda_b * distance_to_negative_patches(0, 0) + const_shift;
             } else {
                 for (int i = 0; i < nodes_per_frame; i++) {
-                    distance_from_source[0][i] = distance_to_positive_patches(0, i) - distance_to_negative_patches(0, i);
+                    distance_from_source[0][i] = lambda_f * distance_to_positive_patches(0, i) - lambda_b * distance_to_negative_patches(0, i) + const_shift;
                 }
             }
             last_layer_expanded += 1; // meaningless variable
@@ -425,12 +408,12 @@ void djikstra() {
                 Point node_pos_1 = candidate_nodes_coordinates[min_node_frame][min_node_number];
                 Point node_pos_2 = candidate_nodes_coordinates[min_node_frame + 1][0];
                 float euclidian_distance = pow(node_pos_1.x - node_pos_2.x, 2) + pow(node_pos_1.y - node_pos_2.y, 2);
-                
                 temp = candidate_nodes[min_node_frame][min_node_number] - candidate_nodes[min_node_frame + 1][0];
                 temp_edge = lambda_s * sum(temp.mul(temp))[0] + lambda_d * euclidian_distance;
+                temp_node = lambda_f * distance_to_positive_patches(min_node_frame + 1, 0) - lambda_b * distance_to_negative_patches(min_node_frame + 1, 0) + const_shift;
                 
-                if (distance_from_source[min_node_frame + 1][0] > distance_from_source[min_node_frame][min_node_number] + temp_edge) {
-                    distance_from_source[min_node_frame + 1][0] = distance_from_source[min_node_frame][min_node_number] + temp_edge;
+                if (distance_from_source[min_node_frame + 1][0] > distance_from_source[min_node_frame][min_node_number] + temp_edge + temp_node) {
+                    distance_from_source[min_node_frame + 1][0] = distance_from_source[min_node_frame][min_node_number] + temp_edge + temp_node;
                     parent_pointers[min_node_frame + 1][0] = min_node_number;
                 }
             // the next layer has many nodes
@@ -446,9 +429,10 @@ void djikstra() {
                         euclidian_distance = pow(node_pos_1.x - node_pos_2.x, 2) + pow(node_pos_1.y - node_pos_2.y, 2);
                         temp = candidate_nodes[min_node_frame][min_node_number] - candidate_nodes[min_node_frame + 1][i];
                         temp_edge = lambda_s * sum(temp.mul(temp))[0] + lambda_d * euclidian_distance;
+                        temp_node = lambda_f * distance_to_positive_patches(min_node_frame + 1, i) - lambda_b * distance_to_negative_patches(min_node_frame + 1, i) + const_shift;
                         
-                        if (distance_from_source[min_node_frame + 1][i] > distance_from_source[min_node_frame][min_node_number] + temp_edge) {
-                            distance_from_source[min_node_frame + 1][i] = distance_from_source[min_node_frame][min_node_number] + temp_edge;
+                        if (distance_from_source[min_node_frame + 1][i] > distance_from_source[min_node_frame][min_node_number] + temp_edge + temp_node) {
+                            distance_from_source[min_node_frame + 1][i] = distance_from_source[min_node_frame][min_node_number] + temp_edge + temp_node;
                             parent_pointers[min_node_frame + 1][i] = min_node_number;
                         }
                     }
@@ -480,8 +464,7 @@ void play_final_video() {
     Point next_node_coordinate;
     int x;
     int y;
-    // int parent_pointers[15][250]
-    // Point candidate_nodes_coordinates[15][250]
+    VideoWriter video("media/outcpp.avi",CV_FOURCC('M','J','P','G'),10, Size(width, height));
     
     for (int i = 0; i < last_frame_number; i++) {
         frame = frames_unnormalized[i].clone();
@@ -490,27 +473,28 @@ void play_final_video() {
         x = next_node_coordinate.x;
         y = next_node_coordinate.y;
         
-        rectangle(frame, Point(x,y), Point(x + patch_width, y + patch_height), Scalar(255,255,255), 1);
+        rectangle(frame, Point(x,y), Point(x + patch_width, y + patch_height), Scalar(255,255,255), 2);
+        video.write(frame);
         imshow("final video", frame);
-        waitKey(0);
+        if (waitKey(50) == 27)
+        {
+            cout << "Esc key is pressed by the user. Stopping the video" << endl;
+            break;
+        }
 
     }
     
+    video.release();
     destroyAllWindows();
     
 }
 
 int main(int argc, const char * argv[]) {
-//    PCA pca = computePCA_basis(); // here only for testing
-    cout << candidate_nodes[0][0] << endl; // []
-    read_video();
-    compress_video();
-    write_mat_to_file(frames_unnormalized[0], "first_video_frame_before_normalizing");
-    write_mat_to_file(frames_unnormalized[13], "thirteenth_video_frame_before_normalizing");
-    mark_interest_points();
-    select_candidates();
-    djikstra();
-    play_final_video();
-//    cout << candidate_nodes[0][0] << endl;
+    read_video(); // fast
+    compress_video(); // slow, but that's expected. "The feature extraction runs at about 1 frame in 3 sec on a commodity PC" - at 10x10 patches. 1 frame in 4 sec for 15x15 patches.
+    mark_interest_points(); // fast
+    select_candidates(); // slow.
+    djikstra(); // fast => no need to use the modified version of Djikstra.
+    play_final_video(); // fast
 }
 

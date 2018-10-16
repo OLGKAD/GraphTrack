@@ -1,6 +1,5 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include "PCA.hpp"
 #include <stdlib.h>     /* srand, rand */
 #include <vector>
 #include "util.hpp"
